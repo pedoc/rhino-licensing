@@ -6,9 +6,9 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyCopyright("")]
 [assembly: AssemblyProduct("")]
 
-[assembly: AssemblyFileVersion("2.0.0.0")]
-[assembly: AssemblyInformationalVersion("2.0.0.0")]
-[assembly: AssemblyVersion("2.0.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.1")]
+[assembly: AssemblyInformationalVersion("2.0.0.1")]
+[assembly: AssemblyVersion("2.0.0.1")]
 
 
 

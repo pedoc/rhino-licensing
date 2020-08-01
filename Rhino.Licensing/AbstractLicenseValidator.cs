@@ -20,7 +20,7 @@ namespace Rhino.Licensing
         /// <summary>
         /// License validator logger
         /// </summary>
-        protected static readonly ILogger Log = Serilog.Log.ForContext(typeof(AbstractLicenseValidator));
+        protected readonly ILogger Log;
 
         /// <summary>
         /// Standard Time servers
@@ -164,6 +164,8 @@ namespace Rhino.Licensing
         protected AbstractLicenseValidator(ServiceFactory serviceFactory, string publicKey, bool enableDiscovery = true)
         {
             this.serviceFactory = serviceFactory;
+            var logger = serviceFactory(typeof(ILogger)) as ILogger;
+            Log = logger ?? Serilog.Log.ForContext(typeof(AbstractLicenseValidator));
             LeaseTimeout = TimeSpan.FromMinutes(5);
             LicenseAttributes = new Dictionary<string, string>();
             nextLeaseTimer = new Timer(LeaseLicenseAgain);
@@ -174,7 +176,7 @@ namespace Rhino.Licensing
             if (DiscoveryEnabled)
             {
                 senderId = Guid.NewGuid();
-                discoveryHost = new DiscoveryHost();
+                discoveryHost = new DiscoveryHost(serviceFactory);
                 discoveryHost.ClientDiscovered += DiscoveryHostOnClientDiscovered;
                 discoveryHost.Start();
             }

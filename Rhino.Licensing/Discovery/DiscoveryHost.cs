@@ -8,167 +8,176 @@ using Serilog;
 
 namespace Rhino.Licensing.Discovery
 {
-	///<summary>
-	/// Listen to precense notifications
-	///</summary>
-	public class DiscoveryHost : IDisposable
-	{
+    ///<summary>
+    /// Listen to precense notifications
+    ///</summary>
+    public class DiscoveryHost : IDisposable
+    {
+        private readonly ServiceFactory serviceFactory;
+
+        public DiscoveryHost(ServiceFactory serviceFactory)
+        {
+            this.serviceFactory = serviceFactory;
+            var logger = serviceFactory(typeof(ILogger)) as ILogger;
+            Log = logger ?? Serilog.Log.ForContext(typeof(DiscoveryHost));
+        }
+
         /// <summary>
         /// License validator logger
         /// </summary>
-        protected static readonly ILogger Log = Serilog.Log.ForContext(typeof(DiscoveryHost));
+        protected readonly ILogger Log;
 
-		private Socket socket;
-		private readonly byte[] buffer = new byte[1024*4];
-		private const string AllHostsMulticastIP = "224.0.0.1";
-		private const int DiscoveryPort = 12391;
+        private Socket socket;
+        private readonly byte[] buffer = new byte[1024 * 4];
+        private const string AllHostsMulticastIP = "224.0.0.1";
+        private const int DiscoveryPort = 12391;
 
         ///<summary>
 		/// Starts listening to network notifications
 		///</summary>
 		public void Start()
-		{
-			socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
-			socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
-			BindUpAdaptersToMulticast();
-			socket.Bind(new IPEndPoint(IPAddress.Any, DiscoveryPort));
-			StartListening();
-		}
+        {
+            socket = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, 1);
+            BindUpAdaptersToMulticast();
+            socket.Bind(new IPEndPoint(IPAddress.Any, DiscoveryPort));
+            StartListening();
+        }
 
-		private void BindUpAdaptersToMulticast()
-		{
-			NetworkInterface.GetAllNetworkInterfaces()
-				.Where(card => card.OperationalStatus == OperationalStatus.Up)
-				.ToList()
-				.ForEach(SetSocketOptionsForNic);
-		}
+        private void BindUpAdaptersToMulticast()
+        {
+            NetworkInterface.GetAllNetworkInterfaces()
+                .Where(card => card.OperationalStatus == OperationalStatus.Up)
+                .ToList()
+                .ForEach(SetSocketOptionsForNic);
+        }
 
-		private void SetSocketOptionsForNic(NetworkInterface nic)
-		{
-		    nic.GetIPProperties()
-		        .UnicastAddresses
-		        .Where(unicast => unicast.Address.AddressFamily == AddressFamily.InterNetwork)
-		        .ToList()
-		        .ForEach(SafelySetSocketOptionsForAddress);
-		}
+        private void SetSocketOptionsForNic(NetworkInterface nic)
+        {
+            nic.GetIPProperties()
+                .UnicastAddresses
+                .Where(unicast => unicast.Address.AddressFamily == AddressFamily.InterNetwork)
+                .ToList()
+                .ForEach(SafelySetSocketOptionsForAddress);
+        }
 
-	    private void SafelySetSocketOptionsForAddress(UnicastIPAddressInformation address)
-	    {
-	        try
-	        {
-	            socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership,
-	                new MulticastOption(IPAddress.Parse(AllHostsMulticastIP), address.Address));
-	        }
-	        catch (SocketException ex)
-	        {
+        private void SafelySetSocketOptionsForAddress(UnicastIPAddressInformation address)
+        {
+            try
+            {
+                socket.SetSocketOption(SocketOptionLevel.IP, SocketOptionName.AddMembership,
+                    new MulticastOption(IPAddress.Parse(AllHostsMulticastIP), address.Address));
+            }
+            catch (SocketException ex)
+            {
                 Log.Warning($"Setting socket options failed for address: {address?.Address}", ex);
-	        }
-	    }
+            }
+        }
 
-		private void StartListening()
-		{
-			var socketAsyncEventArgs = new SocketAsyncEventArgs
-			{
-				RemoteEndPoint = new IPEndPoint(IPAddress.Any, 0),
-			};
-			socketAsyncEventArgs.Completed += Completed;
-			socketAsyncEventArgs.SetBuffer(buffer, 0, buffer.Length);
+        private void StartListening()
+        {
+            var socketAsyncEventArgs = new SocketAsyncEventArgs
+            {
+                RemoteEndPoint = new IPEndPoint(IPAddress.Any, 0),
+            };
+            socketAsyncEventArgs.Completed += Completed;
+            socketAsyncEventArgs.SetBuffer(buffer, 0, buffer.Length);
 
-			bool startedAsync;
-			try
-			{
-				startedAsync = socket.ReceiveFromAsync(socketAsyncEventArgs);
-			}
-			catch (Exception)
-			{
-				return;
-			}
-			if (startedAsync == false)
-				Completed(this, socketAsyncEventArgs);
-		}
+            bool startedAsync;
+            try
+            {
+                startedAsync = socket.ReceiveFromAsync(socketAsyncEventArgs);
+            }
+            catch (Exception)
+            {
+                return;
+            }
+            if (startedAsync == false)
+                Completed(this, socketAsyncEventArgs);
+        }
 
-		private void Completed(object sender, SocketAsyncEventArgs socketAsyncEventArgs)
-		{
-			using (socketAsyncEventArgs)
-			{
-				try
-				{
-					using (var stream = new MemoryStream(socketAsyncEventArgs.Buffer, 0, socketAsyncEventArgs.BytesTransferred))
-					using (var streamReader = new StreamReader(stream))
-					{
-						var senderId = streamReader.ReadLine();
-						var userId = streamReader.ReadLine();
-						var clientDiscovered = new ClientDiscoveredEventArgs
-						{
-							MachineName = streamReader.ReadLine(),
-							UserName = streamReader.ReadLine()
-						};
+        private void Completed(object sender, SocketAsyncEventArgs socketAsyncEventArgs)
+        {
+            using (socketAsyncEventArgs)
+            {
+                try
+                {
+                    using (var stream = new MemoryStream(socketAsyncEventArgs.Buffer, 0, socketAsyncEventArgs.BytesTransferred))
+                    using (var streamReader = new StreamReader(stream))
+                    {
+                        var senderId = streamReader.ReadLine();
+                        var userId = streamReader.ReadLine();
+                        var clientDiscovered = new ClientDiscoveredEventArgs
+                        {
+                            MachineName = streamReader.ReadLine(),
+                            UserName = streamReader.ReadLine()
+                        };
 
-						Guid result;
-						if (Guid.TryParse(userId, out result))
-						{
-							clientDiscovered.UserId = result;
-						}
+                        Guid result;
+                        if (Guid.TryParse(userId, out result))
+                        {
+                            clientDiscovered.UserId = result;
+                        }
 
-						if (Guid.TryParse(senderId, out result))
-						{
-							clientDiscovered.SenderId = result;
-							InvokeClientDiscovered(clientDiscovered);
-						}
-					}
-				}
-				catch
-				{
-				}
-				StartListening();
-			}
-		}
+                        if (Guid.TryParse(senderId, out result))
+                        {
+                            clientDiscovered.SenderId = result;
+                            InvokeClientDiscovered(clientDiscovered);
+                        }
+                    }
+                }
+                catch
+                {
+                }
+                StartListening();
+            }
+        }
 
-		///<summary>
-		/// Notify when a client is discovered
-		///</summary>
-		public event EventHandler<ClientDiscoveredEventArgs> ClientDiscovered;
+        ///<summary>
+        /// Notify when a client is discovered
+        ///</summary>
+        public event EventHandler<ClientDiscoveredEventArgs> ClientDiscovered;
 
-		private void InvokeClientDiscovered(ClientDiscoveredEventArgs e)
-		{
-			EventHandler<ClientDiscoveredEventArgs> handler = ClientDiscovered;
-			if (handler != null) handler(this, e);
-		}
+        private void InvokeClientDiscovered(ClientDiscoveredEventArgs e)
+        {
+            EventHandler<ClientDiscoveredEventArgs> handler = ClientDiscovered;
+            if (handler != null) handler(this, e);
+        }
 
-		/// <summary>
-		/// Notification raised when a client is discovered
-		/// </summary>
-		public class ClientDiscoveredEventArgs : EventArgs
-		{
-			/// <summary>
-			/// The client's license id
-			/// </summary>
-			public Guid UserId { get; set; }
+        /// <summary>
+        /// Notification raised when a client is discovered
+        /// </summary>
+        public class ClientDiscoveredEventArgs : EventArgs
+        {
+            /// <summary>
+            /// The client's license id
+            /// </summary>
+            public Guid UserId { get; set; }
 
-			/// <summary>
-			/// The client machine name
-			/// </summary>
-			public string MachineName { get; set; }
+            /// <summary>
+            /// The client machine name
+            /// </summary>
+            public string MachineName { get; set; }
 
-			/// <summary>
-			/// The client user name
-			/// </summary>
-			public string UserName { get; set; }
+            /// <summary>
+            /// The client user name
+            /// </summary>
+            public string UserName { get; set; }
 
-			/// <summary>
-			/// The id of the sender
-			/// </summary>
-			public Guid SenderId { get; set; }
+            /// <summary>
+            /// The id of the sender
+            /// </summary>
+            public Guid SenderId { get; set; }
 
-		}
+        }
 
         /// <summary>
         /// Disposes of the object
         /// </summary>
 		public void Dispose()
-		{
-			if (socket != null)
-				socket.Dispose();
-		}
-	}
+        {
+            if (socket != null)
+                socket.Dispose();
+        }
+    }
 }
