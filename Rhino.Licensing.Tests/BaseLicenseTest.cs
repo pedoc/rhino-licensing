@@ -1,9 +1,18 @@
+using System;
 using System.IO;
+using System.ServiceModel;
 
 namespace Rhino.Licensing.Tests
 {
     public class BaseLicenseTest
     {
+        protected ServiceFactory ServiceFactory => WcfServiceFactory;
+
+        public  object WcfServiceFactory(Type serviceType)
+        {
+           return ChannelFactory<ILicensingService>.CreateChannel(new WSHttpBinding(), new EndpointAddress("127.0.0.1"));
+        }
+
         public readonly static string public_and_private;
         public readonly static string public_only;
         public readonly static string floating_private;

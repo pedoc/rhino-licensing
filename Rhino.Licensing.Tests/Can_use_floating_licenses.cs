@@ -33,12 +33,15 @@ namespace Rhino.Licensing.Tests
             var host = new ServiceHost(typeof(LicensingService));
             const string address = "http://localhost:19292/license";
             host.AddServiceEndpoint(typeof(ILicensingService), new WSHttpBinding(), address);
-
+            object WcfServiceFactory(Type serviceType)
+            {
+                return ChannelFactory<ILicensingService>.CreateChannel(new WSHttpBinding(), new EndpointAddress(address));
+            }
             host.Open();
             try
             {
 
-                var validator = new LicenseValidator(public_only, fileName, address, Guid.NewGuid());
+                var validator = new LicenseValidator(WcfServiceFactory,public_only, fileName, address, Guid.NewGuid());
                 validator.AssertValidLicense();
             }
             finally
@@ -60,15 +63,18 @@ namespace Rhino.Licensing.Tests
             var host = new ServiceHost(typeof(LicensingService));
             var address = "http://localhost:19292/license";
             host.AddServiceEndpoint(typeof(ILicensingService), new WSHttpBinding(), address);
-
+            object WcfServiceFactory(Type serviceType)
+            {
+                return ChannelFactory<ILicensingService>.CreateChannel(new WSHttpBinding(), new EndpointAddress(address));
+            }
             host.Open();
 
             try
             {
-                var validator = new LicenseValidator(public_only, fileName, address, Guid.NewGuid());
+                var validator = new LicenseValidator(WcfServiceFactory,public_only, fileName, address, Guid.NewGuid());
                 validator.AssertValidLicense();
 
-                var validator2 = new LicenseValidator(public_only, fileName, address, Guid.NewGuid());
+                var validator2 = new LicenseValidator(WcfServiceFactory,public_only, fileName, address, Guid.NewGuid());
                 Assert.Throws<FloatingLicenseNotAvailableException>(() => validator2.AssertValidLicense());
             }
             finally

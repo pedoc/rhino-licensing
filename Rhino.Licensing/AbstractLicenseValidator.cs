@@ -4,11 +4,11 @@ using System.Globalization;
 using System.Net.NetworkInformation;
 using System.Security.Cryptography;
 using System.Security.Cryptography.Xml;
-using System.ServiceModel;
 using System.Threading;
 using System.Xml;
-using log4net;
+using FluentAssertions;
 using Rhino.Licensing.Discovery;
+using Serilog;
 
 namespace Rhino.Licensing
 {
@@ -20,7 +20,7 @@ namespace Rhino.Licensing
         /// <summary>
         /// License validator logger
         /// </summary>
-        protected static readonly ILog Log = LogManager.GetLogger(typeof(LicenseValidator));
+        protected static readonly ILogger Log = Serilog.Log.ForContext(typeof(AbstractLicenseValidator));
 
         /// <summary>
         /// Standard Time servers
@@ -73,7 +73,7 @@ namespace Rhino.Licensing
         {
             get; set;
         }
-        
+
         /// <summary>
         /// Gets the expiration date of the license
         /// </summary>
@@ -153,13 +153,17 @@ namespace Rhino.Licensing
             get; set;
         }
 
+        private readonly ServiceFactory serviceFactory;
+
         /// <summary>
         /// Creates a license validator with specfied public key.
         /// </summary>
+        /// <param name="serviceFactory"></param>
         /// <param name="publicKey">public key</param>
         /// <param name="enableDiscovery">Whether to enable the client discovery server to detect duplicate licenses used on the same network.</param>
-        protected AbstractLicenseValidator(string publicKey, bool enableDiscovery = true)
+        protected AbstractLicenseValidator(ServiceFactory serviceFactory, string publicKey, bool enableDiscovery = true)
         {
+            this.serviceFactory = serviceFactory;
             LeaseTimeout = TimeSpan.FromMinutes(5);
             LicenseAttributes = new Dictionary<string, string>();
             nextLeaseTimer = new Timer(LeaseLicenseAgain);
@@ -180,8 +184,8 @@ namespace Rhino.Licensing
         /// Creates a license validator using the client information
         /// and a service endpoint address to validate the license.
         /// </summary>
-        protected AbstractLicenseValidator(string publicKey, string licenseServerUrl, Guid clientId)
-            : this(publicKey)
+        protected AbstractLicenseValidator(ServiceFactory serviceFactory, string publicKey, string licenseServerUrl, Guid clientId)
+            : this(serviceFactory, publicKey)
         {
             this.licenseServerUrl = licenseServerUrl;
             this.clientId = clientId;
@@ -255,7 +259,7 @@ namespace Rhino.Licensing
                 return;
             }
 
-            Log.WarnFormat("Could not validate existing license\r\n{0}", License);
+            Log.Warning("Could not validate existing license\r\n{License}", License);
             throw new LicenseNotFoundException();
         }
 
@@ -265,10 +269,10 @@ namespace Rhino.Licensing
             {
                 if (TryLoadingLicenseValuesFromValidatedXml() == false)
                 {
-                    Log.WarnFormat("Failed validating license:\r\n{0}", License);
+                    Log.Warning("Failed validating license:\r\n{License}", License);
                     return false;
                 }
-                Log.InfoFormat("License expiration date is {0}", ExpirationDate);
+                Log.Information("License expiration date is {ExpirationDate}", ExpirationDate);
 
                 bool result;
                 if (LicenseType == LicenseType.Subscription)
@@ -345,27 +349,13 @@ namespace Rhino.Licensing
 
         private void TryGettingNewLeaseSubscription()
         {
-            var service = ChannelFactory<ISubscriptionLicensingService>.CreateChannel(new BasicHttpBinding(), new EndpointAddress(SubscriptionEndpoint));
-            try
-            {
-                var newLicense = service.LeaseLicense(License);
-                TryOverwritingWithNewLicense(newLicense);
-            }
-            finally
-            {
-                var communicationObject = service as ICommunicationObject;
-                if (communicationObject != null)
-                {
-                    try
-                    {
-                        communicationObject.Close(TimeSpan.FromMilliseconds(200));
-                    }
-                    catch
-                    {
-                        communicationObject.Abort();
-                    }
-                }
-            }
+            var service = serviceFactory(typeof(ISubscriptionLicensingServiceClient)) as ISubscriptionLicensingServiceClient;
+            service.Should().NotBeNull();
+            // ReSharper disable once PossibleNullReferenceException
+            var newLicense = service.LeaseLicense(License);
+            TryOverwritingWithNewLicense(newLicense);
+            // ReSharper disable once SuspiciousTypeConversion.Global
+            if (service is IDisposable disposable) disposable.Dispose();
         }
 
         /// <summary>
@@ -437,13 +427,13 @@ namespace Rhino.Licensing
 
                 if (TryGetValidDocument(publicKey, doc) == false)
                 {
-                    Log.WarnFormat("Could not validate xml signature of:\r\n{0}", License);
+                    Log.Warning("Could not validate xml signature of:\r\n{License}", License);
                     return false;
                 }
 
                 if (doc.FirstChild == null)
                 {
-                    Log.WarnFormat("Could not find first child of:\r\n{0}", License);
+                    Log.Warning("Could not find first child of:\r\n{License}", License);
                     return false;
                 }
 
@@ -452,7 +442,7 @@ namespace Rhino.Licensing
                     var node = doc.SelectSingleNode("/floating-license/license-server-public-key/text()");
                     if (node == null)
                     {
-                        Log.WarnFormat("Invalid license, floating license without license server public key:\r\n{0}", License);
+                        Log.Warning("Invalid license, floating license without license server public key:\r\n{License}", License);
                         throw new InvalidOperationException(
                             "Invalid license file format, floating license without license server public key");
                     }
@@ -481,56 +471,47 @@ namespace Rhino.Licensing
         {
             if (DisableFloatingLicenses)
             {
-                Log.Warn("Floating licenses have been disabled");
+                Log.Warning("Floating licenses have been disabled");
                 return false;
             }
             if (licenseServerUrl == null)
             {
-                Log.Warn("Could not find license server url");
+                Log.Warning("Could not find license server url");
                 throw new InvalidOperationException("Floating license encountered, but licenseServerUrl was not set");
             }
 
-            var success = false;
-            var licensingService = ChannelFactory<ILicensingService>.CreateChannel(new WSHttpBinding(), new EndpointAddress(licenseServerUrl));
-            try
+            var licensingServiceClient = serviceFactory(typeof(ILicensingServiceClient)) as ILicensingServiceClient;
+            licensingServiceClient.Should().NotBeNull();
+            // ReSharper disable once PossibleNullReferenceException
+            var leasedLicense = licensingServiceClient.LeaseLicense(
+                Environment.MachineName,
+                Environment.UserName,
+                clientId);
+            if (leasedLicense == null)
             {
-                var leasedLicense = licensingService.LeaseLicense(
-                    Environment.MachineName,
-                    Environment.UserName,
-                    clientId);
-                ((ICommunicationObject)licensingService).Close();
-                success = true;
-                if (leasedLicense == null)
-                {
-                    Log.WarnFormat("Null response from license server: {0}", licenseServerUrl);
-                    throw new FloatingLicenseNotAvailableException();
-                }
-
-                var doc = new XmlDocument();
-                doc.LoadXml(leasedLicense);
-
-                if (TryGetValidDocument(publicKeyOfFloatingLicense, doc) == false)
-                {
-                    Log.WarnFormat("Could not get valid license from floating license server {0}", licenseServerUrl);
-                    throw new FloatingLicenseNotAvailableException();
-                }
-
-                var validLicense = ValidateXmlDocumentLicense(doc);
-                if (validLicense)
-                {
-                    //setup next lease
-                    var time = (ExpirationDate.AddMinutes(-5) - DateTime.UtcNow);
-                    Log.DebugFormat("Will lease license again at {0}", time);
-                    if (disableFutureChecks == false)
-                        nextLeaseTimer.Change(time, time);
-                }
-                return validLicense;
+                Log.Warning("Null response from license server: {licenseServerUrl}", licenseServerUrl);
+                throw new FloatingLicenseNotAvailableException();
             }
-            finally
+
+            var doc = new XmlDocument();
+            doc.LoadXml(leasedLicense);
+
+            if (TryGetValidDocument(publicKeyOfFloatingLicense, doc) == false)
             {
-                if (success == false)
-                    ((ICommunicationObject)licensingService).Abort();
+                Log.Warning("Could not get valid license from floating license server {licenseServerUrl}", licenseServerUrl);
+                throw new FloatingLicenseNotAvailableException();
             }
+
+            var validLicense = ValidateXmlDocumentLicense(doc);
+            if (validLicense)
+            {
+                //setup next lease
+                var time = (ExpirationDate.AddMinutes(-5) - DateTime.UtcNow);
+                Log.Debug("Will lease license again at {time}", time);
+                if (disableFutureChecks == false)
+                    nextLeaseTimer.Change(time, time);
+            }
+            return validLicense;
         }
 
         internal bool ValidateXmlDocumentLicense(XmlDocument doc)
@@ -538,7 +519,7 @@ namespace Rhino.Licensing
             var id = doc.SelectSingleNode("/license/@id");
             if (id == null)
             {
-                Log.WarnFormat("Could not find id attribute in license:\r\n{0}", License);
+                Log.Warning("Could not find id attribute in license:\r\n{License}", License);
                 return false;
             }
 
@@ -547,7 +528,7 @@ namespace Rhino.Licensing
             var date = doc.SelectSingleNode("/license/@expiration");
             if (date == null)
             {
-                Log.WarnFormat("Could not find expiration in license:\r\n{0}", License);
+                Log.Warning("Could not find expiration in license:\r\n{License}", License);
                 return false;
             }
 
@@ -556,7 +537,7 @@ namespace Rhino.Licensing
             var licenseType = doc.SelectSingleNode("/license/@type");
             if (licenseType == null)
             {
-                Log.WarnFormat("Could not find license type in {0}", licenseType);
+                Log.Warning("Could not find license type in {licenseType}", licenseType);
                 return false;
             }
 
@@ -565,7 +546,7 @@ namespace Rhino.Licensing
             var name = doc.SelectSingleNode("/license/name/text()");
             if (name == null)
             {
-                Log.WarnFormat("Could not find licensee's name in license:\r\n{0}", License);
+                Log.Warning("Could not find licensee's name in license:\r\n{License}", License);
                 return false;
             }
 
@@ -595,7 +576,7 @@ namespace Rhino.Licensing
             var sig = (XmlElement)doc.SelectSingleNode("//sig:Signature", nsMgr);
             if (sig == null)
             {
-                Log.WarnFormat("Could not find this signature node on license:\r\n{0}", License);
+                Log.Warning("Could not find this signature node on license:\r\n{License}", License);
                 return false;
             }
             signedXml.LoadXml(sig);

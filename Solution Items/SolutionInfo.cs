@@ -2,13 +2,13 @@
 using System.Reflection;
 using System.Runtime.InteropServices;
 
-[assembly: AssemblyCompany("Hibernating Rhinos")]
-[assembly: AssemblyCopyright("Hibernating Rhinos & Ayende Rahien 2004 - 2016")]
-[assembly: AssemblyProduct("Rhino Licensing")]
+[assembly: AssemblyCompany("")]
+[assembly: AssemblyCopyright("")]
+[assembly: AssemblyProduct("")]
 
-[assembly: AssemblyFileVersion("1.3.0.0")]
-[assembly: AssemblyInformationalVersion("1.3.0.0")]
-[assembly: AssemblyVersion("1.3.0.0")]
+[assembly: AssemblyFileVersion("2.0.0.0")]
+[assembly: AssemblyInformationalVersion("2.0.0.0")]
+[assembly: AssemblyVersion("2.0.0.0")]
 
 
 

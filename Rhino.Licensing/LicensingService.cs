@@ -4,18 +4,15 @@ namespace Rhino.Licensing
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.IO;
-    using System.ServiceModel;
+
     using System.Linq;
 
     /// <summary>
     /// Licensing server implementation.
-    /// Because we use this service behavior, we don't have to worry 
-    /// about multi threading issues. it is not something that we 
-    /// expect to have to deal with huge load, anyway.
     /// </summary>
-    [ServiceBehavior(InstanceContextMode = InstanceContextMode.Single, ConcurrencyMode = ConcurrencyMode.Single)]
     public class LicensingService : ILicensingService
     {
+        private readonly ServiceFactory serviceFactory;
         private readonly List<LicenseValidator> availableLicenses = new List<LicenseValidator>();
         private readonly Dictionary<string, KeyValuePair<DateTime, LicenseValidator>> leasedLicenses = new Dictionary<string, KeyValuePair<DateTime, LicenseValidator>>();
         private readonly string state;
@@ -23,13 +20,14 @@ namespace Rhino.Licensing
         /// <summary>
         /// Creates a new instance of <seealso cref="LicensingService"/>.
         /// </summary>
-        public LicensingService()
+        public LicensingService(ServiceFactory serviceFactory)
         {
             if (SoftwarePublicKey == null)
                 throw new InvalidOperationException("SoftwarePublicKey must be set before starting the service");
 
             if (LicenseServerPrivateKey == null)
                 throw new InvalidOperationException("LicenseServerPrivateKey must be set before starting the service");
+            this.serviceFactory = serviceFactory;
 
             var licensesDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Licenses");
             state = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "licenseServer.state");
@@ -77,7 +75,7 @@ namespace Rhino.Licensing
             foreach (var license in Directory.GetFiles(licensesDirectory, "*.xml"))
             {
                 var set = new HashSet<Guid>();
-                var validator = new LicenseValidator(SoftwarePublicKey, license)
+                var validator = new LicenseValidator(serviceFactory,SoftwarePublicKey, license)
                 {
                     DisableFloatingLicenses = true
                 };
